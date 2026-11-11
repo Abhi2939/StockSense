@@ -202,7 +202,10 @@ def generate_predictions(analysis_date: date|None=Query(default=None)):
 
 @app.get("/api/alerts")
 def smart_alerts(warehouse_id: str|None=None, product_id: str|None=None, urgency: str|None=None, supplier_id: str|None=None, start: date|None=None, end: date|None=None):
-    return rows("""WITH suppliers AS (SELECT ps.*,ROW_NUMBER() OVER(PARTITION BY product_id ORDER BY lead_time_days,supply_price) rn FROM PRODUCT_SUPPLIER ps),
+    return rows("""WITH suppliers AS (
+      SELECT ps.*,sup.supplier_name,
+      ROW_NUMBER() OVER(PARTITION BY ps.product_id ORDER BY ps.lead_time_days,ps.supply_price) rn
+      FROM PRODUCT_SUPPLIER ps JOIN SUPPLIER sup USING(supplier_id)),
       snapshots AS (SELECT t.*,rp.reorder_date,rp.recommended_order_qty,rp.predicted_stockout_date,
       ROW_NUMBER() OVER(PARTITION BY t.product_id,t.warehouse_id ORDER BY t.period_start DESC,t.trend_id DESC) latest
       FROM CONSUMPTION_TREND t JOIN REORDER_PREDICTION rp USING(trend_id)), report AS (

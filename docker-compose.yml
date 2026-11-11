@@ -6,7 +6,7 @@ services:
       MYSQL_DATABASE: stocksense
       MYSQL_USER: ${MYSQL_USER:-stocksense}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-stocksense}
-    ports: ["3306:3306"]
+    ports: ["3307:3306"]
     volumes:
       - mysql_data:/var/lib/mysql
       - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
