@@ -53,10 +53,15 @@ def create_product(item: ProductIn):
 
 @app.put("/api/products/{product_id}")
 def update_product(product_id: str, item: ProductIn):
-    if item.product_id != product_id: raise HTTPException(400, "Product ID must match the URL")
-    with SessionLocal.begin() as db:
-        result = db.execute(text("UPDATE PRODUCT SET sku=:sku,product_name=:product_name,unit_cost=:unit_cost,unit_price=:unit_price,category_id=:category_id WHERE product_id=:product_id"), item.model_dump())
-        if not result.rowcount: raise HTTPException(404, "Product not found")
+    if item.product_id != product_id:
+        raise HTTPException(400, "Product ID must match the URL")
+    try:
+        with SessionLocal.begin() as db:
+            result = db.execute(text("UPDATE PRODUCT SET sku=:sku,product_name=:product_name,unit_cost=:unit_cost,unit_price=:unit_price,category_id=:category_id WHERE product_id=:product_id"), item.model_dump())
+            if not result.rowcount:
+                raise HTTPException(404, "Product not found")
+    except IntegrityError as exc:
+        raise HTTPException(409, "SKU or category conflicts with existing data") from exc
     return item.model_dump()
 
 @app.delete("/api/products/{product_id}", status_code=204)
@@ -89,11 +94,14 @@ def warehouses():
 
 @app.get("/api/inventory")
 def inventory():
-    return rows("""SELECT v.*,p.sku,COALESCE(t.trend_slope,0) trend_slope, rp.reorder_date,
-      CASE WHEN rp.reorder_date <= CURRENT_DATE + INTERVAL 3 DAY THEN 'REORDER' ELSE 'OK' END predictive_status
+    return rows("""WITH ranked AS (
+      SELECT t.product_id,t.warehouse_id,t.trend_slope,rp.reorder_date,
+      ROW_NUMBER() OVER(PARTITION BY t.product_id,t.warehouse_id ORDER BY t.period_start DESC,t.trend_id DESC) rn
+      FROM CONSUMPTION_TREND t LEFT JOIN REORDER_PREDICTION rp USING(trend_id))
+      SELECT v.*,p.sku,COALESCE(r.trend_slope,0) trend_slope,r.reorder_date,
+      CASE WHEN r.reorder_date <= CURRENT_DATE + INTERVAL 3 DAY THEN 'REORDER' ELSE 'OK' END predictive_status
       FROM v_inventory_status v JOIN PRODUCT p USING(product_id)
-      LEFT JOIN CONSUMPTION_TREND t ON t.product_id=v.product_id AND t.warehouse_id=v.warehouse_id
-      LEFT JOIN REORDER_PREDICTION rp USING(trend_id)""")
+      LEFT JOIN ranked r ON r.product_id=v.product_id AND r.warehouse_id=v.warehouse_id AND r.rn=1""")
 
 @app.get("/api/transactions")
 def transactions(product_id: str|None=None, warehouse_id: str|None=None, transaction_type: str|None=None, start: date|None=None, end: date|None=None):
@@ -194,16 +202,19 @@ def generate_predictions(analysis_date: date|None=Query(default=None)):
 
 @app.get("/api/alerts")
 def smart_alerts(warehouse_id: str|None=None, product_id: str|None=None, urgency: str|None=None, supplier_id: str|None=None, start: date|None=None, end: date|None=None):
-    return rows("""WITH ranked AS (SELECT ps.*,ROW_NUMBER() OVER(PARTITION BY product_id ORDER BY lead_time_days,supply_price) rn FROM PRODUCT_SUPPLIER ps), report AS (
+    return rows("""WITH suppliers AS (SELECT ps.*,ROW_NUMBER() OVER(PARTITION BY product_id ORDER BY lead_time_days,supply_price) rn FROM PRODUCT_SUPPLIER ps),
+      snapshots AS (SELECT t.*,rp.reorder_date,rp.recommended_order_qty,rp.predicted_stockout_date,
+      ROW_NUMBER() OVER(PARTITION BY t.product_id,t.warehouse_id ORDER BY t.period_start DESC,t.trend_id DESC) latest
+      FROM CONSUMPTION_TREND t JOIN REORDER_PREDICTION rp USING(trend_id)), report AS (
       SELECT w.warehouse_name,p.product_id,p.product_name,i.quantity_on_hand,i.reorder_point,rp.reorder_date,
       DATEDIFF(rp.reorder_date,CURRENT_DATE) days_remaining,
       CASE WHEN rp.reorder_date<CURRENT_DATE THEN 'OVERDUE' WHEN rp.reorder_date<=CURRENT_DATE+INTERVAL 3 DAY THEN 'ORDER NOW'
       WHEN rp.reorder_date<=CURRENT_DATE+INTERVAL 7 DAY THEN 'ORDER SOON' ELSE 'OK' END urgency,
-      s.supplier_name,ranked.supplier_id,rp.recommended_order_qty,ranked.supply_price,
-      rp.recommended_order_qty*ranked.supply_price estimated_cost,rp.predicted_stockout_date
-      FROM REORDER_PREDICTION rp JOIN CONSUMPTION_TREND t USING(trend_id) JOIN INVENTORY i USING(product_id,warehouse_id)
-      JOIN PRODUCT p USING(product_id) JOIN WAREHOUSE w USING(warehouse_id) LEFT JOIN ranked ON ranked.product_id=p.product_id AND ranked.rn=1
-      LEFT JOIN SUPPLIER s ON s.supplier_id=ranked.supplier_id WHERE (:warehouse_id IS NULL OR i.warehouse_id=:warehouse_id) AND (:product_id IS NULL OR p.product_id=:product_id))
+      s.supplier_name,s.supplier_id,rp.recommended_order_qty,s.supply_price,
+      rp.recommended_order_qty*s.supply_price estimated_cost,rp.predicted_stockout_date
+      FROM snapshots rp JOIN INVENTORY i USING(product_id,warehouse_id)
+      JOIN PRODUCT p USING(product_id) JOIN WAREHOUSE w USING(warehouse_id) LEFT JOIN suppliers s ON s.product_id=p.product_id AND s.rn=1
+      WHERE rp.latest=1 AND (:warehouse_id IS NULL OR i.warehouse_id=:warehouse_id) AND (:product_id IS NULL OR p.product_id=:product_id))
       SELECT * FROM report WHERE (:urgency IS NULL OR urgency=:urgency) AND (:supplier_id IS NULL OR supplier_id=:supplier_id)
       AND (:start IS NULL OR reorder_date>=:start) AND (:end IS NULL OR reorder_date<=:end)
       ORDER BY FIELD(urgency,'OVERDUE','ORDER NOW','ORDER SOON','OK'),reorder_date""",
@@ -211,9 +222,12 @@ def smart_alerts(warehouse_id: str|None=None, product_id: str|None=None, urgency
 
 @app.get("/api/comparison")
 def comparison():
-    return rows("""SELECT i.product_id,p.product_name,i.warehouse_id,w.warehouse_name,i.quantity_on_hand,i.reorder_point,
+    return rows("""WITH snapshots AS (SELECT t.product_id,t.warehouse_id,rp.reorder_date,
+      ROW_NUMBER() OVER(PARTITION BY t.product_id,t.warehouse_id ORDER BY t.period_start DESC,t.trend_id DESC) rn
+      FROM CONSUMPTION_TREND t JOIN REORDER_PREDICTION rp USING(trend_id))
+      SELECT i.product_id,p.product_name,i.warehouse_id,w.warehouse_name,i.quantity_on_hand,i.reorder_point,
       CASE WHEN i.quantity_on_hand<=i.reorder_point THEN 'REORDER' ELSE 'OK' END static_status,rp.reorder_date,
       CASE WHEN rp.reorder_date<=CURRENT_DATE+INTERVAL 3 DAY THEN 'REORDER' ELSE 'OK' END predictive_status
-      FROM REORDER_PREDICTION rp JOIN CONSUMPTION_TREND t USING(trend_id) JOIN INVENTORY i USING(product_id,warehouse_id)
+      FROM snapshots rp JOIN INVENTORY i USING(product_id,warehouse_id)
       JOIN PRODUCT p USING(product_id) JOIN WAREHOUSE w USING(warehouse_id)
-      WHERE i.quantity_on_hand>i.reorder_point AND rp.reorder_date<=CURRENT_DATE+INTERVAL 3 DAY ORDER BY rp.reorder_date""")
+      WHERE rp.rn=1 AND i.quantity_on_hand>i.reorder_point AND rp.reorder_date<=CURRENT_DATE+INTERVAL 3 DAY ORDER BY rp.reorder_date""")

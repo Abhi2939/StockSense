@@ -23,11 +23,11 @@ With MySQL seeded and the backend dependencies installed, run `cd backend && pyt
 
 ## Sample data and analysis
 
-The seed script is deterministic and resettable. It uses the product/category, supplier, warehouse, and six product-location examples from the assignment prompt, with explicit deterministic daily patterns. Supplier offer details and inventory thresholds are populated with demo values because Appendix A itself was not included in this repository or prompt. The pattern data therefore demonstrates all three demand directions but cannot assert an exact match to omitted Appendix A rows. Generate a snapshot with `POST /api/predictions/generate?analysis_date=2026-11-03`; production default uses today's date.
+The seed script is resettable and gives each fresh install a recent 21-day sample with deterministic demand patterns. It uses the product/category, supplier, warehouse, and six product-location examples from the assignment prompt. Supplier offer details and inventory thresholds use demo values because Appendix A itself was not included in this repository or prompt. The patterns demonstrate all three demand directions but cannot assert an exact match to omitted Appendix A rows. Select **Generate predictions** in the dashboard or call `POST /api/predictions/generate` to create a current snapshot.
 
 ## API and features
 
-See [API documentation](docs/API_DOCUMENTATION.md), [database design](docs/DATABASE_DESIGN.md), [ER diagram](docs/ER_DIAGRAM.md), [normalization](docs/NORMALIZATION.md), and [SQL requirements](docs/SQL_QUERIES.md). The application provides catalogue CRUD, supplier ranking, capacity utilization, inventory views, filtered transaction history and atomic inventory movements, calendar-complete moving averages, weekly changes, regression trends, persistent predictions, purchasing alerts, and static/predictive comparison.
+See [API documentation](docs/API_DOCUMENTATION.md), [database design](docs/DATABASE_DESIGN.md), [ER diagram](docs/ER_DIAGRAM.md), [normalization](docs/NORMALIZATION.md), and [SQL requirements](docs/SQL_QUERIES.md). The dashboard includes product create/update/delete, ranked supplier offers, location stock and capacity, filtered transaction history, atomic stock movements, calendar-complete moving averages, weekly changes, regression trends, persistent predictions, purchase alerts, and a static/predictive comparison.
 
 ## Notes
 

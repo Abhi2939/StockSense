@@ -23,10 +23,13 @@ INSERT INTO WAREHOUSE VALUES ('W1','Patiala Central','Patiala','Punjab',5000),('
 INSERT INTO INVENTORY VALUES
 ('P101','W1',240,180,120),('P101','W2',190,120,80),('P102','W1',220,100,60),
 ('P102','W2',110,90,50),('P103','W1',160,100,80),('P104','W2',55,50,30);
+-- Place the opening delivery just before the 21-day sales sample so a fresh install
+-- always starts with recent demand data, regardless of when the project is run.
+SELECT DATE_SUB(CURRENT_DATE, INTERVAL 22 DAY) INTO @seed_restock_date;
 INSERT INTO `TRANSACTION` (transaction_date,transaction_type,quantity,product_id,warehouse_id) VALUES
-('2026-10-12','RESTOCK',567,'P101','W1'),('2026-10-12','RESTOCK',316,'P101','W2'),
-('2026-10-12','RESTOCK',398,'P102','W1'),('2026-10-12','RESTOCK',256,'P102','W2'),
-('2026-10-12','RESTOCK',435,'P103','W1'),('2026-10-12','RESTOCK',137,'P104','W2');
+(@seed_restock_date,'RESTOCK',567,'P101','W1'),(@seed_restock_date,'RESTOCK',316,'P101','W2'),
+(@seed_restock_date,'RESTOCK',398,'P102','W1'),(@seed_restock_date,'RESTOCK',256,'P102','W2'),
+(@seed_restock_date,'RESTOCK',435,'P103','W1'),(@seed_restock_date,'RESTOCK',137,'P104','W2');
 
 -- Deterministic 21-day patterns; opening restocks reconcile to ending inventory after sales.
 INSERT INTO `TRANSACTION` (transaction_date,transaction_type,quantity,product_id,warehouse_id)
@@ -37,7 +40,7 @@ WITH RECURSIVE days AS (
   SELECT 'P101','W2',2 UNION ALL SELECT 'P102','W1',3 UNION ALL
   SELECT 'P102','W2',4 UNION ALL SELECT 'P103','W1',5 UNION ALL SELECT 'P104','W2',6
 )
-SELECT DATE_ADD('2026-10-13', INTERVAL days.n DAY), 'SALE',
+SELECT DATE_ADD(DATE_SUB(CURRENT_DATE, INTERVAL 21 DAY), INTERVAL days.n DAY), 'SALE',
        CASE pattern_id
          WHEN 1 THEN 8 + FLOOR(days.n * 0.7) + MOD(days.n,3)
          WHEN 2 THEN 5 + MOD(days.n,3)
